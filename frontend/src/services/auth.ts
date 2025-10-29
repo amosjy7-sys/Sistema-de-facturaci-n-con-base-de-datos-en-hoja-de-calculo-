@@ -1,13 +1,30 @@
 import { apiService } from './api';
-import { Usuario, AuthResponse } from '../../../shared/types';
+import { Usuario } from '../../../shared/types';
+
+interface LoginResponse {
+  success: boolean;
+  data: {
+    token: string;
+    usuario: Usuario;
+    expiresIn: number;
+  };
+}
+
+interface RecuperarPasswordResponse {
+  success: boolean;
+  message: string;
+  data: {
+    passwordTemporal: string;
+  };
+}
 
 class AuthService {
-  async login(nombreUsuario: string, password: string): Promise<AuthResponse> {
-    const response = await apiService.post<AuthResponse>('/auth/login', {
+  async login(nombreUsuario: string, password: string): Promise<{ token: string; usuario: Usuario }> {
+    const response = await apiService.post<LoginResponse>('/auth/login', {
       nombreUsuario,
       password,
     });
-    return response;
+    return response.data;
   }
 
   async verificarToken(): Promise<Usuario> {
@@ -15,8 +32,11 @@ class AuthService {
     return response.data;
   }
 
-  async recuperarPassword(cedula: string): Promise<void> {
-    await apiService.post('/auth/recuperar-password', { cedula });
+  async recuperarPassword(cedula: string): Promise<string> {
+    const response = await apiService.post<RecuperarPasswordResponse>('/auth/recuperar-password', {
+      cedula
+    });
+    return response.data.passwordTemporal;
   }
 
   async cambiarPassword(passwordActual: string, passwordNuevo: string): Promise<void> {
@@ -24,6 +44,15 @@ class AuthService {
       passwordActual,
       passwordNuevo,
     });
+  }
+
+  async logout(): Promise<void> {
+    await apiService.post('/auth/logout');
+  }
+
+  async obtenerPerfil(): Promise<Usuario> {
+    const response = await apiService.get<{ success: boolean; data: Usuario }>('/auth/me');
+    return response.data;
   }
 }
 

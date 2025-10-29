@@ -9,8 +9,9 @@ import { config, isDevelopment } from './config';
 import { logger } from './utils/logger';
 import { errorHandler, notFound } from './middleware/errorHandler';
 
-// Importar rutas (se crearán después)
-// import authRoutes from './routes/auth';
+// Importar rutas
+import authRoutes from './routes/auth';
+import { usuarioService } from './services/usuario';
 // import clienteRoutes from './routes/cliente';
 // import productoRoutes from './routes/producto';
 // etc...
@@ -102,7 +103,7 @@ app.get('/api', (req, res) => {
 });
 
 // Rutas de la API
-// app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 // app.use('/api/clientes', clienteRoutes);
 // app.use('/api/productos', productoRoutes);
 // app.use('/api/descuentos', descuentoRoutes);
@@ -132,7 +133,21 @@ app.use(errorHandler);
 
 const PORT = config.port;
 
-app.listen(PORT, () => {
+// Función para inicializar el sistema
+async function inicializarSistema() {
+  try {
+    logger.info('🔧 Inicializando sistema...');
+
+    // Inicializar usuario administrador por defecto
+    await usuarioService.inicializarUsuarioAdmin();
+
+    logger.info('✅ Sistema inicializado correctamente');
+  } catch (error) {
+    logger.error('❌ Error inicializando sistema:', error);
+  }
+}
+
+app.listen(PORT, async () => {
   logger.info(`🚀 Servidor iniciado en puerto ${PORT}`);
   logger.info(`📊 Ambiente: ${config.nodeEnv}`);
   logger.info(`🌐 API disponible en: http://localhost:${PORT}/api`);
@@ -141,6 +156,9 @@ app.listen(PORT, () => {
   if (isDevelopment) {
     logger.info(`🔧 Modo desarrollo activado`);
   }
+
+  // Inicializar sistema
+  await inicializarSistema();
 });
 
 // Manejo de errores no capturados
