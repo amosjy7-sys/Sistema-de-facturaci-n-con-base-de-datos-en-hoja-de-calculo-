@@ -1,9 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { Usuario, RolUsuario, Permisos, RestriccionesUsuario } from '../../../shared/types';
-import { googleSheetsService } from './googleSheets';
+import { memoryStorage } from './memoryStorage';
 import { logger } from '../utils/logger';
 import { validarEmail } from '../utils/validations';
-import { auditoriaService } from './auditoria';
 import { AccionAuditoria } from '../../../shared/types';
 
 class UsuarioService {
@@ -14,12 +13,14 @@ class UsuarioService {
    */
   async inicializarUsuarioAdmin(): Promise<void> {
     try {
+      await memoryStorage.inicializar();
+
       const usuarios = await this.obtenerTodos();
 
       const adminExiste = usuarios.some(u => u.rol === RolUsuario.ADMIN);
 
       if (!adminExiste) {
-        logger.info('Creando usuario administrador por defecto...');
+        logger.info('🔧 Creando usuario administrador por defecto...');
 
         const passwordHash = await bcrypt.hash('Admin@2025', this.SALT_ROUNDS);
 
@@ -43,12 +44,17 @@ class UsuarioService {
           actualizadoEn: new Date(),
         };
 
-        await this.crear(admin, 'SYSTEM');
+        await memoryStorage.guardarUsuario(admin);
 
-        logger.info('✅ Usuario administrador creado: admin / Admin@2025');
+        logger.info('✅ Usuario administrador creado exitosamente');
+        logger.info('📋 Credenciales:');
+        logger.info('   Usuario: admin');
+        logger.info('   Contraseña: Admin@2025');
+      } else {
+        logger.info('✅ Usuario administrador ya existe');
       }
     } catch (error) {
-      logger.error('Error inicializando usuario admin', error);
+      logger.error('❌ Error inicializando usuario admin', error);
     }
   }
 
@@ -79,36 +85,8 @@ class UsuarioService {
         actualizadoEn: new Date(),
       };
 
-      // Guardar en Google Sheets
-      const valores = [
-        [
-          nuevoUsuario.id,
-          nuevoUsuario.nombreCompleto,
-          nuevoUsuario.cedula,
-          nuevoUsuario.email || '',
-          nuevoUsuario.nombreUsuario,
-          nuevoUsuario.passwordHash,
-          nuevoUsuario.rol,
-          JSON.stringify(nuevoUsuario.permisos),
-          JSON.stringify(nuevoUsuario.restricciones),
-          nuevoUsuario.activo ? 'TRUE' : 'FALSE',
-          '', // Último acceso (vacío inicialmente)
-          nuevoUsuario.creadoEn.toISOString(),
-          nuevoUsuario.actualizadoEn.toISOString(),
-        ],
-      ];
-
-      await googleSheetsService.escribir('USUARIOS', valores);
-
-      // Auditoría
-      await auditoriaService.registrar({
-        usuarioId: creadoPor,
-        modulo: 'Usuarios',
-        accion: AccionAuditoria.CREAR,
-        entidadTipo: 'Usuario',
-        entidadId: nuevoUsuario.id,
-        despues: { ...nuevoUsuario, passwordHash: '[REDACTED]' },
-      });
+      // Guardar en memoria
+      await memoryStorage.guardarUsuario(nuevoUsuario);
 
       logger.info(`Usuario creado: ${nuevoUsuario.nombreUsuario}`);
 
@@ -124,36 +102,7 @@ class UsuarioService {
    */
   async obtenerTodos(): Promise<Usuario[]> {
     try {
-      const datos = await googleSheetsService.leer('USUARIOS');
-
-      if (!datos || datos.length <= 1) {
-        return [];
-      }
-
-      const usuarios: Usuario[] = [];
-
-      for (let i = 1; i < datos.length; i++) {
-        const fila = datos[i];
-        if (!fila[0]) continue; // Saltar filas vacías
-
-        usuarios.push({
-          id: fila[0],
-          nombreCompleto: fila[1],
-          cedula: fila[2],
-          email: fila[3],
-          nombreUsuario: fila[4],
-          passwordHash: fila[5],
-          rol: fila[6] as RolUsuario,
-          permisos: fila[7] ? JSON.parse(fila[7]) : [],
-          restricciones: fila[8] ? JSON.parse(fila[8]) : this.obtenerRestriccionesPorDefecto(),
-          activo: fila[9] === 'TRUE',
-          ultimoAcceso: fila[10] ? new Date(fila[10]) : undefined,
-          creadoEn: new Date(fila[11]),
-          actualizadoEn: new Date(fila[12]),
-        });
-      }
-
-      return usuarios;
+      return await memoryStorage.obtenerUsuarios();
     } catch (error) {
       logger.error('Error obteniendo usuarios', error);
       throw error;
@@ -165,8 +114,7 @@ class UsuarioService {
    */
   async buscarPorId(id: string): Promise<Usuario | null> {
     try {
-      const usuarios = await this.obtenerTodos();
-      return usuarios.find(u => u.id === id) || null;
+      return await memoryStorage.buscarPorId(id);
     } catch (error) {
       logger.error('Error buscando usuario por ID', error);
       throw error;
@@ -178,8 +126,7 @@ class UsuarioService {
    */
   async buscarPorNombreUsuario(nombreUsuario: string): Promise<Usuario | null> {
     try {
-      const usuarios = await this.obtenerTodos();
-      return usuarios.find(u => u.nombreUsuario === nombreUsuario) || null;
+      return await memoryStorage.buscarPorNombreUsuario(nombreUsuario);
     } catch (error) {
       logger.error('Error buscando usuario por nombre', error);
       throw error;
@@ -191,8 +138,7 @@ class UsuarioService {
    */
   async buscarPorCedula(cedula: string): Promise<Usuario | null> {
     try {
-      const usuarios = await this.obtenerTodos();
-      return usuarios.find(u => u.cedula === cedula) || null;
+      return await memoryStorage.buscarPorCedula(cedula);
     } catch (error) {
       logger.error('Error buscando usuario por cédula', error);
       throw error;
@@ -223,12 +169,13 @@ class UsuarioService {
    */
   async actualizarUltimoAcceso(usuarioId: string): Promise<void> {
     try {
-      const fila = await googleSheetsService.buscar('USUARIOS', 'ID', usuarioId);
-      if (!fila) {
+      const usuario = await memoryStorage.buscarPorId(usuarioId);
+      if (!usuario) {
         throw new Error('Usuario no encontrado');
       }
 
-      await googleSheetsService.actualizar('USUARIOS', [[new Date().toISOString()]], `K${fila}`);
+      usuario.ultimoAcceso = new Date();
+      await memoryStorage.actualizarUsuario(usuario);
 
       logger.info(`Último acceso actualizado para usuario: ${usuarioId}`);
     } catch (error) {
@@ -259,25 +206,10 @@ class UsuarioService {
 
       const nuevoHash = await this.hashPassword(passwordNuevo);
 
-      // Actualizar en Google Sheets
-      const fila = await googleSheetsService.buscar('USUARIOS', 'ID', usuarioId);
-      if (!fila) {
-        throw new Error('Usuario no encontrado en Google Sheets');
-      }
-
-      await googleSheetsService.actualizar('USUARIOS', [[nuevoHash]], `F${fila}`);
-
-      // Auditoría
-      await auditoriaService.registrar({
-        usuarioId: cambiadoPor,
-        modulo: 'Usuarios',
-        accion: AccionAuditoria.EDITAR,
-        entidadTipo: 'Usuario',
-        entidadId: usuarioId,
-        antes: { cambioPassword: false },
-        despues: { cambioPassword: true },
-        justificacion: 'Cambio de contraseña',
-      });
+      // Actualizar en memoria
+      usuario.passwordHash = nuevoHash;
+      usuario.actualizadoEn = new Date();
+      await memoryStorage.actualizarUsuario(usuario);
 
       logger.info(`Contraseña cambiada para usuario: ${usuarioId}`);
     } catch (error) {
@@ -300,25 +232,10 @@ class UsuarioService {
       const passwordTemporal = this.generarPasswordTemporal();
       const nuevoHash = await this.hashPassword(passwordTemporal);
 
-      // Actualizar en Google Sheets
-      const fila = await googleSheetsService.buscar('USUARIOS', 'ID', usuario.id);
-      if (!fila) {
-        throw new Error('Usuario no encontrado en Google Sheets');
-      }
-
-      await googleSheetsService.actualizar('USUARIOS', [[nuevoHash]], `F${fila}`);
-
-      // Auditoría
-      await auditoriaService.registrar({
-        usuarioId: usuario.id,
-        modulo: 'Usuarios',
-        accion: AccionAuditoria.EDITAR,
-        entidadTipo: 'Usuario',
-        entidadId: usuario.id,
-        antes: { passwordRecuperado: false },
-        despues: { passwordRecuperado: true },
-        justificacion: 'Recuperación de contraseña',
-      });
+      // Actualizar en memoria
+      usuario.passwordHash = nuevoHash;
+      usuario.actualizadoEn = new Date();
+      await memoryStorage.actualizarUsuario(usuario);
 
       logger.info(`Contraseña recuperada para usuario: ${usuario.nombreUsuario}`);
 
@@ -347,39 +264,7 @@ class UsuarioService {
         actualizadoEn: new Date(),
       };
 
-      const fila = await googleSheetsService.buscar('USUARIOS', 'ID', id);
-      if (!fila) {
-        throw new Error('Usuario no encontrado en Google Sheets');
-      }
-
-      const valores = [[
-        usuarioActualizado.id,
-        usuarioActualizado.nombreCompleto,
-        usuarioActualizado.cedula,
-        usuarioActualizado.email || '',
-        usuarioActualizado.nombreUsuario,
-        usuarioActualizado.passwordHash,
-        usuarioActualizado.rol,
-        JSON.stringify(usuarioActualizado.permisos),
-        JSON.stringify(usuarioActualizado.restricciones),
-        usuarioActualizado.activo ? 'TRUE' : 'FALSE',
-        usuarioActualizado.ultimoAcceso?.toISOString() || '',
-        usuarioActualizado.creadoEn.toISOString(),
-        usuarioActualizado.actualizadoEn.toISOString(),
-      ]];
-
-      await googleSheetsService.actualizar('USUARIOS', valores, `A${fila}:M${fila}`);
-
-      // Auditoría
-      await auditoriaService.registrar({
-        usuarioId: actualizadoPor,
-        modulo: 'Usuarios',
-        accion: AccionAuditoria.EDITAR,
-        entidadTipo: 'Usuario',
-        entidadId: id,
-        antes: { ...usuario, passwordHash: '[REDACTED]' },
-        despues: { ...usuarioActualizado, passwordHash: '[REDACTED]' },
-      });
+      await memoryStorage.actualizarUsuario(usuarioActualizado);
 
       logger.info(`Usuario actualizado: ${id}`);
 
